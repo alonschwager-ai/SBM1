@@ -1,0 +1,59 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.role == 'admin';
+    }
+
+    // 10MB cap, images or PDFs only (certs/signatures may be PDF, hazard photos are images)
+    function isValidUpload() {
+      return request.resource.size < 10 * 1024 * 1024
+        && (request.resource.contentType.matches('image/.*')
+            || request.resource.contentType == 'application/pdf');
+    }
+
+    // certificates/{userId}/{fileName} - owned by the officer the cert belongs to
+    match /certificates/{userId}/{fileName} {
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
+      allow write: if (isAdmin() || (isSignedIn() && request.auth.uid == userId)) && isValidUpload();
+    }
+
+    // hazards/{reportId}/{fileName} - ownership derived from the report doc in Firestore
+    match /hazards/{reportId}/{fileName} {
+      allow read: if isAdmin()
+        || firestore.get(/databases/(default)/documents/reports/$(reportId)).data.userId == request.auth.uid;
+      allow write: if (isAdmin()
+        || firestore.get(/databases/(default)/documents/reports/$(reportId)).data.userId == request.auth.uid)
+        && isValidUpload();
+    }
+
+    // signatures/{reportId}/{fileName} - client signature captured on-site
+    match /signatures/{reportId}/{fileName} {
+      allow read: if isAdmin()
+        || firestore.get(/databases/(default)/documents/reports/$(reportId)).data.userId == request.auth.uid;
+      allow write: if (isAdmin()
+        || firestore.get(/databases/(default)/documents/reports/$(reportId)).data.userId == request.auth.uid)
+        && isValidUpload();
+    }
+
+    // contracts/{clientId}/{fileName} - signed client contract, admin-only
+    // (never exposed to safety officers, including on "My Workplaces").
+    match /contracts/{clientId}/{fileName} {
+      allow read: if isAdmin();
+      allow write: if isAdmin() && isValidUpload();
+    }
+
+    // safety-docs/{docId}/{fileName} - guideline/regulation PDFs, managed
+    // by admins at /admin/safety-docs, viewable by any signed-in officer.
+    match /safety-docs/{docId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin() && isValidUpload();
+    }
+  }
+}

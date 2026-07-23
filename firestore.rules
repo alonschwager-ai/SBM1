@@ -1,0 +1,153 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -----------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // role is kept in a custom claim (synced by the syncUserClaims
+    // Cloud Function whenever users/{uid}.role changes) so checking it
+    // here costs zero extra document reads.
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.role == 'admin';
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function unchanged(field) {
+      return request.resource.data[field] == resource.data[field];
+    }
+
+    // -----------------------------------------------------------------
+    // users (profiles)
+    // -----------------------------------------------------------------
+    match /users/{userId} {
+      allow read: if isAdmin() || isOwner(userId);
+
+      // profile documents are provisioned by the onAuthUserCreate
+      // Cloud Function (Admin SDK, bypasses rules). Direct client
+      // creation is admin-only (e.g. pre-provisioning an employee).
+      allow create: if isAdmin();
+
+      // an officer may edit their own contact details, but never their
+      // own role, the cert-status fields (only ever written by the
+      // onCertificateWrite Cloud Function), or their own active flag
+      // (only an admin may deactivate/reactivate an account).
+      allow update: if isAdmin()
+        || (isOwner(userId)
+            && unchanged('role')
+            && unchanged('certStatus')
+            && unchanged('nearestCertExpiration')
+            && unchanged('active'));
+
+      allow delete: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------
+    // certificates
+    // -----------------------------------------------------------------
+    match /certificates/{certId} {
+      allow read: if isAdmin() || isOwner(resource.data.userId);
+      allow create: if isAdmin() || isOwner(request.resource.data.userId);
+      allow update: if isAdmin() || isOwner(resource.data.userId);
+      allow delete: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------
+    // clients
+    // assignedOfficerIds is a denormalized array maintained by the
+    // syncClientAssignments Cloud Function whenever a schedule is
+    // created/reassigned/deleted - lets an officer read only the
+    // clients they actually service, without a live query in rules.
+    // assignedOfficerId is the separate permanent/primary officer set
+    // directly by an admin (Communication Hub / "My Workplaces"), which
+    // may exist before any schedule ever puts them in assignedOfficerIds.
+    // -----------------------------------------------------------------
+    match /clients/{clientId} {
+      allow read: if isAdmin()
+        || (isSignedIn()
+            && (request.auth.uid in resource.data.get('assignedOfficerIds', [])
+                || request.auth.uid == resource.data.get('assignedOfficerId', null)));
+      allow create, update, delete: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------
+    // schedules
+    // The hard "no expired/expiring-soon certificate" rule is NOT
+    // enforced here: a security rule can only see the denormalized
+    // certStatus snapshot, which can be a few hundred ms stale right
+    // after a certificate is edited. For a compliance-critical check
+    // like this we want a live query at write time, so creating a
+    // schedule or reassigning officer/date is only allowed through the
+    // assignSchedule callable Cloud Function (Admin SDK, bypasses
+    // rules). Direct client writes here are limited to the assigned
+    // officer flipping status (e.g. completed/canceled).
+    // -----------------------------------------------------------------
+    match /schedules/{scheduleId} {
+      allow read: if isAdmin() || isOwner(resource.data.userId);
+      allow create: if false;
+      allow update: if isAdmin()
+        || (isOwner(resource.data.userId)
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['status', 'updatedAt', 'checkedInAt', 'checkedInLocation']));
+      allow delete: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------
+    // reports
+    // -----------------------------------------------------------------
+    match /reports/{reportId} {
+      allow read: if isAdmin() || isOwner(resource.data.userId);
+      allow create: if isAdmin()
+        || (isOwner(request.resource.data.userId)
+            && get(/databases/$(database)/documents/schedules/$(request.resource.data.scheduleId)).data.userId == request.auth.uid);
+      allow update: if isAdmin() || isOwner(resource.data.userId);
+      allow delete: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------
+    // hazards
+    // ownership is derived from the parent report (one extra get()).
+    // -----------------------------------------------------------------
+    match /hazards/{hazardId} {
+      allow read: if isAdmin()
+        || get(/databases/$(database)/documents/reports/$(resource.data.reportId)).data.userId == request.auth.uid;
+      allow create: if isAdmin()
+        || get(/databases/$(database)/documents/reports/$(request.resource.data.reportId)).data.userId == request.auth.uid;
+      allow update: if isAdmin()
+        || get(/databases/$(database)/documents/reports/$(resource.data.reportId)).data.userId == request.auth.uid;
+      allow delete: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------
+    // scheduleChangeRequests
+    // Always admin-mediated (see ScheduleChangeRequestDoc): the officer
+    // can only create a request against a schedule they own, and can never
+    // edit it afterwards - approving/rejecting (the only update path) is
+    // admin-only, done from the Pending Requests widget on /admin/schedule.
+    // -----------------------------------------------------------------
+    match /scheduleChangeRequests/{requestId} {
+      allow read: if isAdmin() || isOwner(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId)
+        && get(/databases/$(database)/documents/schedules/$(request.resource.data.scheduleId)).data.userId == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------
+    // safetyDocs
+    // Managed by admins at /admin/safety-docs, read by any signed-in user
+    // (officers browse them by sector on /officer/tools).
+    // -----------------------------------------------------------------
+    match /safetyDocs/{docId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+  }
+}
