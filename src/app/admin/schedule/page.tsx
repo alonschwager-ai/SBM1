@@ -94,6 +94,18 @@ export default function SchedulePage() {
     () => new Map(clients.map((c) => [c.id, c.companyName])),
     [clients]
   );
+
+  // Only meaningful in week view - counts each client's active (non-canceled)
+  // schedules within the currently displayed range, which IS the week when
+  // view === "week", to check against their weeklyDaysCount quota.
+  const scheduledCountByClient = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of schedules) {
+      if (s.status === "canceled") continue;
+      map.set(s.clientId, (map.get(s.clientId) ?? 0) + 1);
+    }
+    return map;
+  }, [schedules]);
   const officerNameById = useMemo(
     () => new Map(officers.map((o) => [o.id, o.fullName])),
     [officers]
@@ -153,9 +165,27 @@ export default function SchedulePage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {clients.map((client) => (
+              {clients.map((client) => {
+                const used = scheduledCountByClient.get(client.id) ?? 0;
+                const quota = client.weeklyDaysCount;
+                const remaining = quota != null ? quota - used : null;
+                return (
                 <TableRow key={client.id}>
-                  <TableCell className="font-medium">{client.companyName}</TableCell>
+                  <TableCell className="font-medium">
+                    <div>{client.companyName}</div>
+                    {quota != null && (
+                      <div
+                        className={cn(
+                          "text-[0.7rem] font-normal",
+                          remaining !== null && remaining <= 0
+                            ? "text-destructive"
+                            : "text-muted-foreground"
+                        )}
+                      >
+                        נותרו {Math.max(remaining ?? 0, 0)}/{quota} ימים
+                      </div>
+                    )}
+                  </TableCell>
                   {days.map((day) => {
                     const cellSchedules = schedulesFor(day, client.id);
                     return (
@@ -188,7 +218,8 @@ export default function SchedulePage() {
                     );
                   })}
                 </TableRow>
-              ))}
+                );
+              })}
               {clients.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={days.length + 1} className="text-center text-muted-foreground">

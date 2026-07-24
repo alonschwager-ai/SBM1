@@ -5,6 +5,16 @@ import { CERT_EXPIRY_WARNING_DAYS, ScheduleStatus } from "./types";
 
 const db = () => getFirestore();
 
+// Sunday-start week boundary, matching date-fns' startOfWeek(date, { weekStartsOn: 0 })
+// used by the admin schedule board and the assign-schedule-dialog pre-check -
+// no date-fns dependency needed here for one calculation.
+function startOfWeekSunday(date: Date): Date {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - start.getDay());
+  return start;
+}
+
 interface AssignScheduleRequest {
   scheduleId?: string; // omit to create a new schedule
   userId: string; // safety officer being assigned
@@ -14,7 +24,7 @@ interface AssignScheduleRequest {
 
 /**
  * The single entry point for creating a schedule or reassigning its
- * officer/date. This is the authoritative enforcement of two hard
+ * officer/date. This is the authoritative enforcement of three hard
  * business rules:
  *
  *   1. "block assigning a safety officer if any of their certificates is
@@ -23,6 +33,8 @@ interface AssignScheduleRequest {
  *      certificate for every type the client requires"
  *      (clients/{clientId}.requiredCertTypes, set from the client's Site
  *      Requirements config on /admin/clients/[id])
+ *   3. "don't let a client's total scheduled days in a given (Sunday-start)
+ *      week exceed their configured weeklyDaysCount quota"
  *
  * Firestore security rules can only see a denormalized snapshot
  * (users/{uid}.certStatus, refreshed asynchronously by
@@ -85,6 +97,31 @@ export const assignSchedule = onCall<AssignScheduleRequest>(async (request) => {
       throw new HttpsError(
         "failed-precondition",
         `לא ניתן לשבץ ממונה בטיחות זה: חסרות תעודות נדרשות עבור לקוח זה (${missing.join(", ")})`
+      );
+    }
+  }
+
+  const weeklyDaysCount = clientDoc.data()?.weeklyDaysCount as number | undefined;
+  if (weeklyDaysCount != null && weeklyDaysCount > 0) {
+    const weekStart = startOfWeekSunday(new Date(scheduledDate));
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 7);
+
+    const weekSchedules = await db()
+      .collection("schedules")
+      .where("clientId", "==", clientId)
+      .where("scheduledDate", ">=", Timestamp.fromDate(weekStart))
+      .where("scheduledDate", "<", Timestamp.fromDate(weekEnd))
+      .get();
+
+    const activeCount = weekSchedules.docs.filter(
+      (scheduleDoc) => scheduleDoc.id !== scheduleId && scheduleDoc.data().status !== "canceled"
+    ).length;
+
+    if (activeCount + 1 > weeklyDaysCount) {
+      throw new HttpsError(
+        "failed-precondition",
+        `לא ניתן לשבץ: חריגה ממכסת ${weeklyDaysCount} הימים השבועית של הלקוח (השבוע כבר משובצים ${activeCount} ימים)`
       );
     }
   }

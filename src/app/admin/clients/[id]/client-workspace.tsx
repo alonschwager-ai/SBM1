@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
   collection,
+  deleteField,
   doc,
   limit,
   onSnapshot,
@@ -23,8 +24,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/lib/auth-context";
 import { submitReportAction } from "@/lib/actions/report-actions";
+import { CERTIFICATION_TYPES } from "@/lib/constants/certificationTypes";
 import { db } from "@/lib/firebase";
 import { ClientDoc, HazardDoc, ReportDoc, ScheduleDoc, UserDoc } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 type ClientRow = ClientDoc & { id: string };
 type ScheduleRow = ScheduleDoc & { id: string };
@@ -43,6 +46,8 @@ export function ClientWorkspace({ clientId }: { clientId: string }) {
   const [reportsExhausted, setReportsExhausted] = useState(false);
   const [newRequiredCert, setNewRequiredCert] = useState("");
   const [sendingReportId, setSendingReportId] = useState<string | null>(null);
+  const [editingDays, setEditingDays] = useState(false);
+  const [daysPerWeekInput, setDaysPerWeekInput] = useState("");
 
   useEffect(() => {
     return onSnapshot(doc(db, "clients", clientId), (snap) => {
@@ -97,23 +102,36 @@ export function ClientWorkspace({ clientId }: { clientId: string }) {
     [todaySchedules]
   );
 
-  async function addRequiredCert() {
-    if (!client || !newRequiredCert.trim()) return;
-    const next = [...(client.requiredCertTypes ?? []), newRequiredCert.trim()];
+  async function toggleRequiredCert(value: string) {
+    if (!client) return;
+    const current = client.requiredCertTypes ?? [];
+    const next = current.includes(value)
+      ? current.filter((c) => c !== value)
+      : [...current, value];
     await updateDoc(doc(db, "clients", clientId), {
       requiredCertTypes: next,
       updatedAt: serverTimestamp(),
     });
+  }
+
+  async function addCustomRequiredCert() {
+    if (!client || !newRequiredCert.trim()) return;
+    await toggleRequiredCert(newRequiredCert.trim());
     setNewRequiredCert("");
   }
 
-  async function removeRequiredCert(value: string) {
-    if (!client) return;
-    const next = (client.requiredCertTypes ?? []).filter((c) => c !== value);
+  function startEditingDays() {
+    setDaysPerWeekInput(client?.weeklyDaysCount != null ? String(client.weeklyDaysCount) : "");
+    setEditingDays(true);
+  }
+
+  async function saveDaysPerWeek() {
+    const value = daysPerWeekInput.trim();
     await updateDoc(doc(db, "clients", clientId), {
-      requiredCertTypes: next,
+      weeklyDaysCount: value ? Number(value) : deleteField(),
       updatedAt: serverTimestamp(),
     });
+    setEditingDays(false);
   }
 
   async function handleSendReport(reportId: string) {
@@ -199,30 +217,90 @@ export function ClientWorkspace({ clientId }: { clientId: string }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>דרישות תעודה לשיבוץ באתר זה</CardTitle>
+          <CardTitle>דרישות שיבוץ לאתר זה</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2">
-          <div className="flex flex-wrap gap-1.5">
-            {(client.requiredCertTypes ?? []).map((cert) => (
-              <Badge key={cert} variant="outline" className="gap-1">
-                {cert}
-                <button type="button" onClick={() => removeRequiredCert(cert)}>
-                  <XIcon className="size-3" />
-                </button>
-              </Badge>
-            ))}
-            {(client.requiredCertTypes ?? []).length === 0 && (
-              <p className="text-sm text-muted-foreground">אין דרישות תעודה מיוחדות</p>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <div className="text-sm font-medium">ימי עבודה נדרשים בשבוע</div>
+              <div className="text-xs text-muted-foreground">
+                משמש למעקב המכסה השבועית בלוח השיבוצים
+              </div>
+            </div>
+            {editingDays ? (
+              <div className="flex items-center gap-1.5">
+                <Input
+                  type="number"
+                  min={0}
+                  max={7}
+                  className="w-16"
+                  autoFocus
+                  value={daysPerWeekInput}
+                  onChange={(e) => setDaysPerWeekInput(e.target.value)}
+                />
+                <Button size="sm" onClick={saveDaysPerWeek}>
+                  שמירה
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setEditingDays(false)}>
+                  ביטול
+                </Button>
+              </div>
+            ) : (
+              <Button size="sm" variant="outline" onClick={startEditingDays}>
+                {client.weeklyDaysCount != null ? `${client.weeklyDaysCount} ימים` : "לא הוגדר"}
+              </Button>
             )}
           </div>
+
+          <div className="space-y-1.5">
+            <div className="text-sm font-medium">תעודות נדרשות לממונה</div>
+            <div className="flex flex-wrap gap-1.5">
+            {CERTIFICATION_TYPES.map((type) => {
+              const active = (client.requiredCertTypes ?? []).includes(type);
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => toggleRequiredCert(type)}
+                  className={cn(
+                    "rounded-full border px-3 py-1 text-xs font-medium transition",
+                    active
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border hover:bg-muted"
+                  )}
+                >
+                  {type}
+                </button>
+              );
+            })}
+          </div>
+
+          {(client.requiredCertTypes ?? []).filter(
+            (cert) => !(CERTIFICATION_TYPES as readonly string[]).includes(cert)
+          ).length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {(client.requiredCertTypes ?? [])
+                .filter((cert) => !(CERTIFICATION_TYPES as readonly string[]).includes(cert))
+                .map((cert) => (
+                  <Badge key={cert} variant="outline" className="gap-1">
+                    {cert}
+                    <button type="button" onClick={() => toggleRequiredCert(cert)}>
+                      <XIcon className="size-3" />
+                    </button>
+                  </Badge>
+                ))}
+            </div>
+          )}
+          </div>
+
           <div className="flex gap-2">
             <Input
               value={newRequiredCert}
               onChange={(e) => setNewRequiredCert(e.target.value)}
-              placeholder="לדוגמה: תעודת גובה"
-              onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addRequiredCert())}
+              placeholder="דרישה מותאמת אישית (לא ברשימה)"
+              onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addCustomRequiredCert())}
             />
-            <Button type="button" variant="outline" onClick={addRequiredCert}>
+            <Button type="button" variant="outline" onClick={addCustomRequiredCert}>
               <PlusIcon data-icon="inline-start" />
               הוספה
             </Button>

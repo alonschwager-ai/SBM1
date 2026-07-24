@@ -46,8 +46,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { CERTIFICATION_TYPES } from "@/lib/constants/certificationTypes";
 import { db, storage } from "@/lib/firebase";
 import { ClientDoc, INDUSTRY_SECTOR_LABELS, IndustrySector, UserDoc } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 type ClientRow = ClientDoc & { id: string };
 type OfficerOption = UserDoc & { id: string };
@@ -68,6 +70,7 @@ const EMPTY_FORM = {
   googleMapsUrl: "",
   weeklyDaysCount: "",
   industrySector: NO_SECTOR,
+  requiredCertTypes: [] as string[],
 };
 
 export default function ClientsPage() {
@@ -96,6 +99,15 @@ export default function ClientsPage() {
     );
   }, []);
 
+  function toggleFormCert(type: string) {
+    setForm((prev) => ({
+      ...prev,
+      requiredCertTypes: prev.requiredCertTypes.includes(type)
+        ? prev.requiredCertTypes.filter((c) => c !== type)
+        : [...prev.requiredCertTypes, type],
+    }));
+  }
+
   function openCreate() {
     setEditing(null);
     setForm(EMPTY_FORM);
@@ -118,6 +130,7 @@ export default function ClientsPage() {
       googleMapsUrl: client.googleMapsUrl ?? "",
       weeklyDaysCount: client.weeklyDaysCount ? String(client.weeklyDaysCount) : "",
       industrySector: client.industrySector ?? NO_SECTOR,
+      requiredCertTypes: client.requiredCertTypes ?? [],
     });
     setContractFile(null);
     setDialogOpen(true);
@@ -320,6 +333,30 @@ export default function ClientsPage() {
                       value={form.weeklyDaysCount}
                       onChange={(e) => setForm({ ...form, weeklyDaysCount: e.target.value })}
                     />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label>תעודות נדרשות לממונה</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {CERTIFICATION_TYPES.map((type) => {
+                      const active = form.requiredCertTypes.includes(type);
+                      return (
+                        <button
+                          key={type}
+                          type="button"
+                          onClick={() => toggleFormCert(type)}
+                          className={cn(
+                            "rounded-full border px-3 py-1 text-xs font-medium transition",
+                            active
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border hover:bg-muted"
+                          )}
+                        >
+                          {type}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 

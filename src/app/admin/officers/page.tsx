@@ -48,6 +48,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { CertStatusBadge } from "@/components/cert-status-badge";
+import { CERTIFICATION_TYPES, OTHER_CERTIFICATION } from "@/lib/constants/certificationTypes";
 import { db, functions, storage } from "@/lib/firebase";
 import {
   CertificateDoc,
@@ -65,7 +66,7 @@ type ClientRow = ClientDoc & { id: string };
 type ScheduleRow = ScheduleDoc & { id: string };
 type RequestRow = ScheduleChangeRequestDoc & { id: string };
 
-const CERT_FORM_EMPTY = { certType: "", issueDate: "", expirationDate: "" };
+const CERT_FORM_EMPTY = { certType: "", customCertType: "", issueDate: "", expirationDate: "" };
 
 export default function OfficersPage() {
   const [officers, setOfficers] = useState<UserRow[]>([]);
@@ -225,7 +226,9 @@ export default function OfficersPage() {
 
   async function handleAddCert(event: FormEvent) {
     event.preventDefault();
-    if (!selected || !certForm.certType || !certForm.issueDate || !certForm.expirationDate) return;
+    const resolvedCertType =
+      certForm.certType === OTHER_CERTIFICATION ? certForm.customCertType.trim() : certForm.certType;
+    if (!selected || !resolvedCertType || !certForm.issueDate || !certForm.expirationDate) return;
     setUploadingCert(true);
     try {
       let documentUrl: string | undefined;
@@ -236,7 +239,7 @@ export default function OfficersPage() {
       }
       await addDoc(collection(db, "certificates"), {
         userId: selected.id,
-        certType: certForm.certType,
+        certType: resolvedCertType,
         issueDate: Timestamp.fromDate(new Date(certForm.issueDate)),
         expirationDate: Timestamp.fromDate(new Date(certForm.expirationDate)),
         ...(documentUrl ? { documentUrl } : {}),
@@ -496,13 +499,31 @@ export default function OfficersPage() {
 
                 <form onSubmit={handleAddCert} className="space-y-2 rounded-lg border p-3">
                   <div className="space-y-1.5">
-                    <Label htmlFor="certType">סוג תעודה</Label>
-                    <Input
-                      id="certType"
-                      required
+                    <Label>סוג תעודה</Label>
+                    <Select
                       value={certForm.certType}
-                      onChange={(e) => setCertForm({ ...certForm, certType: e.target.value })}
-                    />
+                      onValueChange={(value) => setCertForm({ ...certForm, certType: value ?? "" })}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="בחירת סוג תעודה" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CERTIFICATION_TYPES.map((type) => (
+                          <SelectItem key={type} value={type}>
+                            {type}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value={OTHER_CERTIFICATION}>אחר (הזנה חופשית)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {certForm.certType === OTHER_CERTIFICATION && (
+                      <Input
+                        placeholder="סוג תעודה מותאם אישית"
+                        required
+                        value={certForm.customCertType}
+                        onChange={(e) => setCertForm({ ...certForm, customCertType: e.target.value })}
+                      />
+                    )}
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1.5">
