@@ -25,6 +25,14 @@
       ]
     },
     {
+      "collectionGroup": "schedules",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "clientId", "order": "ASCENDING" },
+        { "fieldPath": "scheduledDate", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "hazards",
       "queryScope": "COLLECTION",
       "fields": [
