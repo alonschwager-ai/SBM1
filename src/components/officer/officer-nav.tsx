@@ -10,6 +10,7 @@ const LINKS = [
   { href: "/officer/calendar", label: "לוח שנה" },
   { href: "/officer/workplaces", label: "לקוחות" },
   { href: "/officer/tools", label: "כלים" },
+  { href: "/officer/profile", label: "פרופיל" },
 ];
 
 export function OfficerNav() {
